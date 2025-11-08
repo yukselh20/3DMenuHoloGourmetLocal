@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install Meshroom
-RUN wget "https://www.fosshub.com/Meshroom.html?dwl=Meshroom-2023.3.0-linux.tar.gz" -O /tmp/meshroom.tar.gz && \
+RUN wget "https://github.com/alicevision/Meshroom/releases/download/v2023.3.0/Meshroom-2023.3.0-linux.tar.gz" -O /tmp/meshroom.tar.gz && \
     tar -zxvf /tmp/meshroom.tar.gz -C /opt && \
     rm /tmp/meshroom.tar.gz
 ENV PATH="/opt/Meshroom-2023.3.0:${PATH}"
