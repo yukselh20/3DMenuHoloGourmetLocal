@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend:/app
+      - ./local_storage:/app/local_storage
+    environment:
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=ar_menu_db
+      - JWT_SECRET_KEY=a_secure_secret_key
+      - CORS_ORIGINS=http://localhost:3000
+    depends_on:
+      - mongo
+      - redis
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - REACT_APP_BACKEND_URL=http://localhost:8001
+    depends_on:
+      - backend
+
+  worker:
+    build: ./photogrammetry-worker
+    volumes:
+      - ./local_storage:/app/local_storage
+      - ./photogrammetry-worker:/app
+    environment:
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=ar_menu_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - mongo
+
+volumes:
+  mongo-data:
