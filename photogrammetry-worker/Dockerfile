@@ -14,7 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install Meshroom
-RUN wget -qO- "https://github.com/alicevision/meshroom/releases/download/v2021.1.0/Meshroom-2021.1.0-linux-av2.4.0-glibc2.27.tar.gz" | tar zx -C /opt
+RUN wget "https://github.com/alicevision/meshroom/releases/download/v2021.1.0/Meshroom-2021.1.0-linux-av2.4.0-glibc2.27.tar.gz" -O /tmp/meshroom.tar.gz && \
+    tar -zxvf /tmp/meshroom.tar.gz -C /opt && \
+    rm /tmp/meshroom.tar.gz
 ENV PATH="/opt/Meshroom-2021.1.0:${PATH}"
 
 # Install Python dependencies
