@@ -4,9 +4,6 @@ FROM python:3.9-slim
 # Set working directory
 WORKDIR /app
 
-# Create a non-root user
-RUN useradd -m worker
-
 # Install Meshroom dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
@@ -26,11 +23,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application's code
 COPY . .
 
-# Change ownership of the app directory
-RUN chown -R worker:worker /app
-
-# Switch to the non-root user
-USER worker
-
 # Command to run the Celery worker
-CMD ["sh", "-c", "chown -R worker:worker /app/local_storage && celery -A tasks worker --loglevel=info"]
+CMD ["celery", "-A", "tasks", "worker", "--loglevel=info"]
