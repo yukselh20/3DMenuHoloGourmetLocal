@@ -40,20 +40,21 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
     Celery task to perform photogrammetry processing.
     """
     try:
-        # Update job status to PROCESSING
+        logger.info(f"Starting photogrammetry job {job_id} for menu item {menu_item_id}")
         db.photogrammetry_jobs.update_one(
             {"id": job_id},
             {"$set": {"status": "PROCESSING"}}
         )
 
-        # 1. Unzip the images
+        logger.info(f"Unzipping file: {zip_filename}")
         zip_path = RAW_UPLOADS_DIR / zip_filename
         unzip_dir = RAW_UPLOADS_DIR / job_id
         unzip_dir.mkdir(exist_ok=True)
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(unzip_dir)
+        logger.info("Unzipping complete.")
 
-        # 2. Run Meshroom
+        logger.info("Starting Meshroom process...")
         output_dir = PROCESSED_MODELS_DIR / job_id
         output_dir.mkdir(exist_ok=True)
 
@@ -66,7 +67,7 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
             "--input", str(unzip_dir),
             "--output", str(output_dir),
             "--cache", str(cache_dir),
-            "--force-no-gps"
+            "--paramOverrides", "StructureFromMotion:useGps=False"
         ]
 
         # Define pipeline stages for progress tracking
@@ -104,6 +105,7 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
             if process.returncode != 0:
                 raise subprocess.CalledProcessError(process.returncode, meshroom_cmd, stdout, stderr)
 
+            logger.info("Meshroom process finished successfully.")
             logger.info(f"Meshroom output:\n{stdout}")
 
         except subprocess.CalledProcessError as e:
@@ -113,19 +115,22 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
             logger.error(error_message)
             raise Exception(error_message)
 
-        # 3. Find the generated model
+        logger.info("Searching for generated model file...")
         obj_files = list(output_dir.glob("**/texturedMesh.obj"))
         if not obj_files:
+            logger.error("Meshroom did not produce an OBJ file.")
             raise Exception("Meshroom did not produce an OBJ file.")
         obj_path = obj_files[0]
+        logger.info(f"Found model file: {obj_path}")
 
-        # 4. Optimize and convert to GLB using trimesh
+        logger.info("Optimizing and converting model to GLB format...")
         mesh = trimesh.load(obj_path)
         glb_filename = f"{menu_item_id}.glb"
         glb_path = PROCESSED_MODELS_DIR / glb_filename
         mesh.export(glb_path, file_type='glb')
+        logger.info(f"Model saved to: {glb_path}")
 
-        # 5. Update the database
+        logger.info("Updating database with model URL and job completion status.")
         model_url = f"/static/models/{glb_filename}"
         db.menu_items.update_one(
             {"id": menu_item_id},
@@ -139,6 +144,7 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
                 "completed_at": datetime.now(timezone.utc).isoformat()
             }}
         )
+        logger.info(f"Job {job_id} completed successfully.")
 
     except Exception as e:
         db.photogrammetry_jobs.update_one(
@@ -149,10 +155,13 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
                 "completed_at": datetime.now(timezone.utc).isoformat()
             }}
         )
+        logger.error(f"An error occurred during job {job_id}: {e}", exc_info=True)
         raise e
     finally:
-        # Clean up temporary files
+        logger.info(f"Cleaning up temporary files for job {job_id}.")
         if 'unzip_dir' in locals() and unzip_dir.exists():
             subprocess.run(["rm", "-rf", str(unzip_dir)])
+            logger.info(f"Removed unzipped directory: {unzip_dir}")
         if 'output_dir' in locals() and output_dir.exists():
             subprocess.run(["rm", "-rf", str(output_dir)])
+            logger.info(f"Removed Meshroom output directory: {output_dir}")
