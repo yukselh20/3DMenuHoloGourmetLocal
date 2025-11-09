@@ -65,7 +65,8 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
             "meshroom_batch",
             "--input", str(unzip_dir),
             "--output", str(output_dir),
-            "--cache", str(cache_dir)
+            "--cache", str(cache_dir),
+            "--force-no-gps"
         ]
 
         # Define pipeline stages for progress tracking
