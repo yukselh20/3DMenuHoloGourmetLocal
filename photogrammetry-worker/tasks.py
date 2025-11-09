@@ -108,6 +108,7 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
                 "completed_at": datetime.now(timezone.utc).isoformat()
             }}
         )
+        raise e
     finally:
         # Clean up temporary files
         if 'unzip_dir' in locals() and unzip_dir.exists():
