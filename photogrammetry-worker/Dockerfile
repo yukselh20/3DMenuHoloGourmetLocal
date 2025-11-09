@@ -33,4 +33,4 @@ RUN chown -R worker:worker /app
 USER worker
 
 # Command to run the Celery worker
-CMD ["celery", "-A", "tasks", "worker", "--loglevel=info"]
+CMD ["sh", "-c", "chown -R worker:worker /app/local_storage && celery -A tasks worker --loglevel=info"]
