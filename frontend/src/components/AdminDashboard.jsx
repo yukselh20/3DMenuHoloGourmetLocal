@@ -41,28 +41,43 @@ const AdminDashboard = () => {
     }
   }, [token]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      menuItems.forEach(item => {
+        if (item.latest_job && item.latest_job.status === 'PROCESSING') {
+          fetchJobStatus(item.latest_job.id);
+        }
+      });
+    }, 5000); // Poll every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [menuItems]);
+
   const fetchMenuItems = async () => {
     try {
       const response = await axios.get(`${API}/menu-items`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setMenuItems(response.data);
-      
-      // Fetch job statuses for items
-      response.data.forEach(item => {
-        fetchJobStatus(item.id);
-      });
     } catch (error) {
       toast.error('Failed to fetch menu items');
     }
   };
 
-  const fetchJobStatus = async (itemId) => {
+  const fetchJobStatus = async (jobId) => {
     try {
-      const response = await axios.get(`${API}/jobs/${itemId}`, {
+      const response = await axios.get(`${API}/jobs/${jobId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      setJobStatuses(prev => ({ ...prev, [itemId]: response.data }));
+
+      setMenuItems(prevItems =>
+        prevItems.map(item =>
+          item.latest_job && item.latest_job.id === jobId
+            ? { ...item, latest_job: response.data }
+            : item
+        )
+      );
+
     } catch (error) {
       console.error('Failed to fetch job status', error);
     }
@@ -133,28 +148,8 @@ const AdminDashboard = () => {
       toast.success('Images uploaded! Processing started...');
       setUploadFile(null);
       
-      // Poll for job status
-      const pollInterval = setInterval(async () => {
-        try {
-          const jobResponse = await axios.get(`${API}/jobs/${itemId}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          
-          setJobStatuses(prev => ({ ...prev, [itemId]: jobResponse.data }));
-          
-          if (jobResponse.data.status === 'COMPLETED' || jobResponse.data.status === 'FAILED') {
-            clearInterval(pollInterval);
-            if (jobResponse.data.status === 'COMPLETED') {
-              toast.success('3D model generated successfully!');
-              fetchMenuItems();
-            } else {
-              toast.error('Processing failed: ' + jobResponse.data.error_message);
-            }
-          }
-        } catch (error) {
-          clearInterval(pollInterval);
-        }
-      }, 3000);
+      // Immediately update the job status for this item
+      fetchJobStatus(response.data.job_id);
       
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Upload failed');
@@ -313,12 +308,24 @@ const AdminDashboard = () => {
                 <CardContent className="space-y-4">
                   <p className="text-sm text-slate-600 line-clamp-2" data-testid="menu-item-description">{item.description}</p>
                   
-                  {jobStatus && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-500">Status:</span>
-                      <span className={`text-xs px-2 py-1 rounded-full ${getStatusBadge(jobStatus.status)}`} data-testid="job-status-badge">
-                        {jobStatus.status || 'NO_JOB'}
-                      </span>
+                  {item.latest_job && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-slate-500">Status:</span>
+                        <span className={`text-xs px-2 py-1 rounded-full ${getStatusBadge(item.latest_job.status)}`} data-testid="job-status-badge">
+                          {item.latest_job.status}
+                        </span>
+                      </div>
+                      {item.latest_job.status === 'PROCESSING' && (
+                        <div>
+                          <div className="w-full bg-gray-200 rounded-full h-2.5">
+                            <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${item.latest_job.progress || 0}%` }}></div>
+                          </div>
+                          <p className="text-xs text-slate-500 text-center mt-1">
+                            {item.latest_job.current_stage} ({Math.round(item.latest_job.progress || 0)}%)
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -69,6 +69,18 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+class PhotogrammetryJob(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    menu_item_id: str
+    status: str  # PENDING, PROCESSING, COMPLETED, FAILED
+    progress: Optional[float] = 0.0
+    current_stage: Optional[str] = "PENDING"
+    raw_images_zip_path: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: Optional[datetime] = None
+
 class MenuItem(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -80,6 +92,7 @@ class MenuItem(BaseModel):
     model_url: Optional[str] = None
     owner_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    latest_job: Optional[PhotogrammetryJob] = None
 
 class MenuItemCreate(BaseModel):
     name: str
@@ -94,16 +107,6 @@ class MenuItemUpdate(BaseModel):
     price: Optional[float] = None
     allergens: Optional[List[str]] = None
     dimensions_cm: Optional[dict] = None
-
-class PhotogrammetryJob(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    menu_item_id: str
-    status: str  # PENDING, PROCESSING, COMPLETED, FAILED
-    raw_images_zip_path: Optional[str] = None
-    error_message: Optional[str] = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    completed_at: Optional[datetime] = None
 
 # Helper functions
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -209,13 +212,27 @@ async def create_menu_item(
 
 @api_router.get("/menu-items", response_model=List[MenuItem])
 async def get_menu_items(current_user: User = Depends(get_current_user)):
-    items = await db.menu_items.find({"owner_id": current_user.id}, {"_id": 0}).to_list(1000)
+    items_cursor = db.menu_items.find({"owner_id": current_user.id}, {"_id": 0})
+    items = await items_cursor.to_list(1000)
     
     for item in items:
+        # Fetch the latest job for each menu item
+        latest_job = await db.photogrammetry_jobs.find_one(
+            {"menu_item_id": item["id"]},
+            {"_id": 0},
+            sort=[("created_at", -1)]
+        )
+        item["latest_job"] = latest_job
+
+        # Convert date strings to datetime objects
         if isinstance(item.get('created_at'), str):
             item['created_at'] = datetime.fromisoformat(item['created_at'])
-    
-    return items
+        if latest_job and isinstance(latest_job.get('created_at'), str):
+            latest_job['created_at'] = datetime.fromisoformat(latest_job['created_at'])
+        if latest_job and latest_job.get('completed_at') and isinstance(latest_job['completed_at'], str):
+            latest_job['completed_at'] = datetime.fromisoformat(latest_job['completed_at'])
+
+    return [MenuItem(**item) for item in items]
 
 @api_router.get("/menu-items/{item_id}", response_model=MenuItem)
 async def get_menu_item(
@@ -356,35 +373,34 @@ async def upload_images(
     }
 
 # Job Status Routes
-@api_router.get("/jobs/{item_id}")
+@api_router.get("/jobs/{job_id}")
 async def get_job_status(
-    item_id: str,
+    job_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    # Check if item belongs to user
-    existing_item = await db.menu_items.find_one(
-        {"id": item_id, "owner_id": current_user.id}
-    )
-    
-    if not existing_item:
-        raise HTTPException(status_code=404, detail="Menu item not found")
-    
-    # Get latest job for this item
+    # Get the job by its ID
     job = await db.photogrammetry_jobs.find_one(
-        {"menu_item_id": item_id},
-        {"_id": 0},
-        sort=[("created_at", -1)]
+        {"id": job_id},
+        {"_id": 0}
     )
-    
+
     if not job:
-        return {"status": "NO_JOB", "message": "No processing job found"}
-    
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check if the menu item associated with the job belongs to the current user
+    menu_item = await db.menu_items.find_one(
+        {"id": job["menu_item_id"], "owner_id": current_user.id}
+    )
+
+    if not menu_item:
+        raise HTTPException(status_code=403, detail="Not authorized to view this job's status")
+
     # Convert dates if needed
     if isinstance(job.get('created_at'), str):
         job['created_at'] = datetime.fromisoformat(job['created_at'])
     if job.get('completed_at') and isinstance(job['completed_at'], str):
         job['completed_at'] = datetime.fromisoformat(job['completed_at'])
-    
+
     return PhotogrammetryJob(**job)
 
 # Public Routes
