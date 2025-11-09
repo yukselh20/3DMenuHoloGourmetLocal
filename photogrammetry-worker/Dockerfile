@@ -1,0 +1,28 @@
+# Use an official Python runtime as a parent image
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install Meshroom dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget \
+    unzip \
+    libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and install Meshroom
+RUN wget "https://github.com/alicevision/Meshroom/releases/download/v2023.3.0/Meshroom-2023.3.0-linux.tar.gz" -O /tmp/meshroom.tar.gz && \
+    tar -zxvf /tmp/meshroom.tar.gz -C /opt && \
+    rm /tmp/meshroom.tar.gz
+ENV PATH="/opt/Meshroom-2023.3.0:${PATH}"
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application's code
+COPY . .
+
+# Command to run the Celery worker
+CMD ["celery", "-A", "tasks", "worker", "--loglevel=info"]

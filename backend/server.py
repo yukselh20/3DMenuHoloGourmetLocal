@@ -1,6 +1,8 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
@@ -12,15 +14,20 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-import boto3
-from botocore.exceptions import ClientError
-import io
 import zipfile
-import asyncio
+import io
+from fastapi.staticfiles import StaticFiles
+import storage_utils
+from celery import Celery
+
+# Celery configuration
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
+
+celery = Celery('tasks', broker=CELERY_BROKER_URL, backend=CELERY_RESULT_BACKEND)
 
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -35,26 +42,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# S3 Configuration
-AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
-S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
-S3_REGION = os.environ.get('S3_REGION', 'us-east-1')
-
-# Initialize S3 client (will be None if credentials not provided)
-s3_client = None
-if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and S3_BUCKET_NAME:
-    s3_client = boto3.client(
-        's3',
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-        region_name=S3_REGION
-    )
-
 # Create the main app
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer()
+
+# Mount static files directory
+app.mount("/static/models", StaticFiles(directory="local_storage/processed_models"), name="models")
 
 # Models
 class User(BaseModel):
@@ -106,7 +100,7 @@ class PhotogrammetryJob(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     menu_item_id: str
     status: str  # PENDING, PROCESSING, COMPLETED, FAILED
-    raw_images_zip_url: Optional[str] = None
+    raw_images_zip_path: Optional[str] = None
     error_message: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
@@ -152,66 +146,6 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         user['created_at'] = datetime.fromisoformat(user['created_at'])
     
     return User(**user)
-
-def upload_to_s3(file_content: bytes, key: str, content_type: str = 'application/zip') -> str:
-    """Upload file to S3 and return the URL"""
-    if not s3_client:
-        # Mock S3 upload for local development
-        return f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{key}"
-    
-    try:
-        s3_client.put_object(
-            Bucket=S3_BUCKET_NAME,
-            Key=key,
-            Body=file_content,
-            ContentType=content_type
-        )
-        return f"https://{S3_BUCKET_NAME}.s3.{S3_REGION}.amazonaws.com/{key}"
-    except ClientError as e:
-        logging.error(f"Error uploading to S3: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upload file")
-
-async def process_photogrammetry_job(job_id: str, menu_item_id: str):
-    """Mock photogrammetry processing - simulates the Meshroom pipeline"""
-    try:
-        # Update job status to PROCESSING
-        await db.photogrammetry_jobs.update_one(
-            {"id": job_id},
-            {"$set": {"status": "PROCESSING"}}
-        )
-        
-        # Simulate processing time (5-10 seconds)
-        await asyncio.sleep(8)
-        
-        # Use a sample GLB model URL (this would be the converted output in production)
-        # For MVP, we're using a publicly available sample model
-        sample_model_url = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Duck/glTF-Binary/Duck.glb"
-        
-        # Update menu item with model URL
-        await db.menu_items.update_one(
-            {"id": menu_item_id},
-            {"$set": {"model_url": sample_model_url}}
-        )
-        
-        # Update job status to COMPLETED
-        await db.photogrammetry_jobs.update_one(
-            {"id": job_id},
-            {"$set": {
-                "status": "COMPLETED",
-                "completed_at": datetime.now(timezone.utc).isoformat()
-            }}
-        )
-        
-    except Exception as e:
-        # Update job status to FAILED
-        await db.photogrammetry_jobs.update_one(
-            {"id": job_id},
-            {"$set": {
-                "status": "FAILED",
-                "error_message": str(e),
-                "completed_at": datetime.now(timezone.utc).isoformat()
-            }}
-        )
 
 # Auth Routes
 @api_router.post("/auth/register", response_model=Token)
@@ -392,16 +326,16 @@ async def upload_images(
     # Create job ID
     job_id = str(uuid.uuid4())
     
-    # Upload to S3
-    s3_key = f"raw-zips/{job_id}.zip"
-    zip_url = upload_to_s3(file_content, s3_key, 'application/zip')
+    # Save the uploaded file to local storage
+    zip_filename = f"{job_id}.zip"
+    zip_path = storage_utils.save_raw_upload(file_content, zip_filename)
     
     # Create photogrammetry job
     job = PhotogrammetryJob(
         id=job_id,
         menu_item_id=item_id,
         status="PENDING",
-        raw_images_zip_url=zip_url
+        raw_images_zip_path=str(zip_path)
     )
     
     job_doc = job.model_dump()
@@ -409,8 +343,11 @@ async def upload_images(
     
     await db.photogrammetry_jobs.insert_one(job_doc)
     
-    # Start background task to process photogrammetry
-    asyncio.create_task(process_photogrammetry_job(job_id, item_id))
+    # Send task to Celery worker
+    celery.send_task(
+        "tasks.process_photogrammetry",
+        args=[job_id, item_id, zip_filename]
+    )
     
     return {
         "message": "Upload successful",
