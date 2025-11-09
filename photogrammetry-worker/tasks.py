@@ -67,7 +67,7 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
             "--input", str(unzip_dir),
             "--output", str(output_dir),
             "--cache", str(cache_dir),
-            "--paramOverrides", "StructureFromMotion:useGps=False"
+            "--paramOverrides", "StructureFromMotion:useGpsTransformation=False"
         ]
 
         # Define pipeline stages for progress tracking
