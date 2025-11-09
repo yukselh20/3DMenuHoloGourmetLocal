@@ -7,6 +7,11 @@ from pymongo import MongoClient
 from datetime import datetime, timezone
 import trimesh
 from dotenv import load_dotenv
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -56,7 +61,16 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
             "--input", str(unzip_dir),
             "--output", str(output_dir)
         ]
-        subprocess.run(meshroom_cmd, check=True, capture_output=True, text=True)
+
+        try:
+            process = subprocess.run(meshroom_cmd, check=True, capture_output=True, text=True)
+            logger.info(f"Meshroom output:\n{process.stdout}")
+        except subprocess.CalledProcessError as e:
+            error_message = f"Meshroom failed with exit code {e.returncode}.\n"
+            error_message += f"Stdout:\n{e.stdout}\n"
+            error_message += f"Stderr:\n{e.stderr}\n"
+            logger.error(error_message)
+            raise Exception(error_message)
 
         # 3. Find the generated model
         obj_files = list(output_dir.glob("**/texturedMesh.obj"))
