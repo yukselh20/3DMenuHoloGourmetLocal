@@ -8,6 +8,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     unzip \
+    libgssapi-krb5-2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and install Meshroom
