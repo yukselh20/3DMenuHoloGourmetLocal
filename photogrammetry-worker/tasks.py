@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import trimesh
 from dotenv import load_dotenv
 import logging
+import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -56,15 +57,54 @@ def process_photogrammetry(job_id: str, menu_item_id: str, zip_filename: str):
         output_dir = PROCESSED_MODELS_DIR / job_id
         output_dir.mkdir(exist_ok=True)
 
+        # Define cache directory for Meshroom logs
+        cache_dir = PROCESSED_MODELS_DIR / f"{job_id}_cache"
+        cache_dir.mkdir(exist_ok=True)
+
         meshroom_cmd = [
             "meshroom_batch",
             "--input", str(unzip_dir),
-            "--output", str(output_dir)
+            "--output", str(output_dir),
+            "--cache", str(cache_dir)
         ]
 
+        # Define pipeline stages for progress tracking
+        pipeline_stages = [
+            "CameraInit", "FeatureExtraction", "ImageMatching", "FeatureMatching",
+            "StructureFromMotion", "PrepareDenseScene", "DepthMap", "DepthMapFilter",
+            "Meshing", "MeshFiltering", "Texturing"
+        ]
+        total_stages = len(pipeline_stages)
+
         try:
-            process = subprocess.run(meshroom_cmd, check=True, capture_output=True, text=True)
-            logger.info(f"Meshroom output:\n{process.stdout}")
+            process = subprocess.Popen(meshroom_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            # Monitor progress by checking for log files
+            while process.poll() is None:
+                completed_stages = 0
+                for i, stage in enumerate(pipeline_stages):
+                    log_file = cache_dir / stage / "0" / "log"
+                    if log_file.exists():
+                        completed_stages = i + 1
+
+                progress = (completed_stages / total_stages) * 100
+                current_stage_name = pipeline_stages[completed_stages - 1] if completed_stages > 0 else "Starting"
+
+                db.photogrammetry_jobs.update_one(
+                    {"id": job_id},
+                    {"$set": {
+                        "progress": progress,
+                        "current_stage": current_stage_name
+                    }}
+                )
+                time.sleep(5) # Poll every 5 seconds
+
+            stdout, stderr = process.communicate()
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, meshroom_cmd, stdout, stderr)
+
+            logger.info(f"Meshroom output:\n{stdout}")
+
         except subprocess.CalledProcessError as e:
             error_message = f"Meshroom failed with exit code {e.returncode}.\n"
             error_message += f"Stdout:\n{e.stdout}\n"
